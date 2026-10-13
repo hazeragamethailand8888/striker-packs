@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS saves(uid INT PRIMARY KEY, data TEXT, n INT, lineup T
 CREATE TABLE IF NOT EXISTS friends(uid INT, fid INT, PRIMARY KEY(uid, fid));
 CREATE TABLE IF NOT EXISTS ch(uid INT, tid INT, t REAL);
 ''')
+try:
+    con.execute('ALTER TABLE users ADD COLUMN rp INT DEFAULT 0'); con.commit()
+except sqlite3.OperationalError:
+    pass
 hits = {}  # ip -> [timestamps] for login/register throttling
 streams, invites, matches, chat, lastmsg, paired = {}, {}, {}, [], {}, {}
 
@@ -69,7 +73,7 @@ class H(BaseHTTPRequestHandler):
         return tok
     def find(self, name):
         with lock: return con.execute('SELECT * FROM users WHERE lc=?', (str(name).strip().lower(),)).fetchone()
-    def pub(self, r): return {k: r[k] for k in ('name', 'av', 'lv', 'power', 'points')}
+    def pub(self, r): return {k: r[k] for k in ('name', 'av', 'lv', 'power', 'points', 'rp')}
 
     def do_GET(self): self.route('GET')
     def do_POST(self): self.route('POST')
@@ -147,16 +151,16 @@ class H(BaseHTTPRequestHandler):
         up = {k: v for k, v in (lu.get('up') or {}).items() if k in own and isinstance(v, int) and 0 <= v <= 5}
         fo = {k: v for k, v in (lu.get('fo') or {}).items() if k in own and isinstance(v, int) and -3 <= v <= 3}
         lineup = json.dumps({'fm': str(lu.get('fm', '4-3-3'))[:8], 'ids': ids, 'up': up, 'fo': fo})
-        power = max(0, min(1100, int(d.get('power') or 0))); lv = max(1, min(999, int(d.get('lv') or 1)))
+        power = max(0, min(1100, int(d.get('power') or 0))); lv = max(1, min(999, int(d.get('lv') or 1))); rp = max(0, min(5000, int(d.get('rp') or 0)))
         with lock:
             con.execute('INSERT INTO saves VALUES(?,?,?,?,?) ON CONFLICT(uid) DO UPDATE SET data=?,n=?,lineup=?,upd=?',
                         (u['id'], json.dumps(data), int(d.get('n') or 0), lineup, time.time(), json.dumps(data), int(d.get('n') or 0), lineup, time.time()))
-            con.execute('UPDATE users SET lv=?,power=?,av=? WHERE id=?', (lv, power, cleanav(d.get('av', u['av'])), u['id'])); con.commit()
+            con.execute('UPDATE users SET lv=?,power=?,rp=?,av=? WHERE id=?', (lv, power, rp, cleanav(d.get('av', u['av'])), u['id'])); con.commit()
         self.out({'ok': 1})
 
     def board(self):
-        by = 'points' if 'by=points' in (self.path or '') else 'power'
-        with lock: rows = con.execute(f'SELECT name,av,lv,power,points FROM users ORDER BY {by} DESC LIMIT 20').fetchall()
+        by = 'rp' if 'by=rp' in self.path else ('points' if 'by=points' in self.path else ('lv' if 'by=lv' in self.path else 'power'))
+        with lock: rows = con.execute(f'SELECT name,av,lv,power,points,rp FROM users ORDER BY {by} DESC LIMIT 20').fetchall()
         self.out({'ok': 1, 'rows': [self.pub(r) for r in rows]})
 
     def friends(self, u):
